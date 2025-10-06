@@ -533,7 +533,6 @@ void Agenerator::FinalizeRooms()
 {
 	TSet<AActor*> FinalRooms;
 
-	// 1?? On garde toutes les pièces principales
 	for (AActor* Room : MainRooms)
 	{
 		if (!Room) continue;
@@ -543,7 +542,6 @@ void Agenerator::FinalizeRooms()
 		Room->SetActorTickEnabled(true);
 	}
 
-	// 2?? Ajouter toutes les pièces secondaires qui se trouvent sur les chemins MST
 	for (const FDelaunayEdge& Edge : MSTEdges)
 	{
 		FVector2D Start2D = Edge.A;
@@ -554,7 +552,6 @@ void Agenerator::FinalizeRooms()
 		{
 			if (!Room || FinalRooms.Contains(Room)) continue;
 
-			// On ne regarde que les pièces secondaires
 			if (AbaseActor* RoomActor = Cast<AbaseActor>(Room))
 			{
 				if (RoomActor->RoomData.bMainRoom)
@@ -566,7 +563,6 @@ void Agenerator::FinalizeRooms()
 
 			FVector2D StartToPoint = Pos2D - Start2D;
 
-			// Projection du point sur la ligne
 			float T = FVector2D::DotProduct(StartToPoint, Dir) / Dir.SizeSquared();
 			T = FMath::Clamp(T, 0.f, 1.f);
 
@@ -574,7 +570,7 @@ void Agenerator::FinalizeRooms()
 
 			float Dist = FVector2D::Distance(Pos2D, ClosestPoint);
 
-			if (Dist < 50.f) // Tolérance de 50 unités
+			if (Dist < 50.f) 
 			{
 				FinalRooms.Add(Room);
 				Room->SetActorHiddenInGame(false);
@@ -584,7 +580,6 @@ void Agenerator::FinalizeRooms()
 		}
 	}
 
-	// 3?? Supprimer toutes les pièces non finales
 	for (AActor* Room : SpawnedRooms)
 	{
 		if (!FinalRooms.Contains(Room))
@@ -593,7 +588,6 @@ void Agenerator::FinalizeRooms()
 		}
 	}
 
-	// Met à jour la liste des pièces actuelles
 	SpawnedRooms = FinalRooms.Array();
 }
 
