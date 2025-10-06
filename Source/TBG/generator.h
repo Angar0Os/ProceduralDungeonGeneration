@@ -97,11 +97,34 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Delaunay Debug")
 	float StepDelay = 0.5f; 
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Generation")
+	bool bGenerateCorridors = false;
+
+	UFUNCTION()
+	void BuildCorridors();
+
+	UFUNCTION()
+	void FinalizeRooms();
+
 	UPROPERTY()
 	TArray<AActor*> SpawnedRooms;
 
 	UPROPERTY()
 	TArray<AActor*> MainRooms;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug")
+	int32 DebugStep = 0; 
+
+	UPROPERTY()
+	TArray<FDelaunayEdge> MSTEdges;
+
+	void BuildMST();
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug")
+	bool ShowMST = false;
+
+	UFUNCTION()
+	void NextDebugStep();
 	
 	FTimerHandle DelaunayStepTimer;
 	int32 CurrentPointIndex = 0;

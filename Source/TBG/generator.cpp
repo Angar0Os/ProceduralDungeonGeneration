@@ -4,6 +4,10 @@
 #include "generator.h"
 #include "baseActor.h"
 
+#include "DrawDebugHelpers.h"
+#include "Engine/World.h"
+#include "Engine/Engine.h"
+
 // Sets default values
 Agenerator::Agenerator()
 {
@@ -36,14 +40,14 @@ void Agenerator::BeginPlay()
 	}
 
 	SpawnedRooms.Sort([](const AActor& A, const AActor& B)
-	{
-		const AbaseActor* RoomA = Cast<AbaseActor>(&A);
-		const AbaseActor* RoomB = Cast<AbaseActor>(&B);
-	
-		if (!RoomA || !RoomB) return false;
-	
-		return RoomA->RoomData.FloorArea > RoomB->RoomData.FloorArea; 
-	});
+		{
+			const AbaseActor* RoomA = Cast<AbaseActor>(&A);
+			const AbaseActor* RoomB = Cast<AbaseActor>(&B);
+
+			if (!RoomA || !RoomB) return false;
+
+			return RoomA->RoomData.FloorArea > RoomB->RoomData.FloorArea;
+		});
 
 	int32 NumRooms = SpawnedRooms.Num();
 	int32 NumMainRooms = FMath::CeilToInt(NumRooms * 0.2f);
@@ -77,6 +81,9 @@ void Agenerator::BeginPlay()
 
 	ComputeSuperTriangle();
 	BuildDelaunay();
+
+	EnableInput(GetWorld()->GetFirstPlayerController());
+	InputComponent->BindAction("NextDebugStep", IE_Pressed, this, &Agenerator::NextDebugStep);
 }
 
 // Called every frame
@@ -104,6 +111,17 @@ void Agenerator::Tick(float DeltaTime)
 			DrawDebugLine(GetWorld(), C3D, A3D, FColor::Yellow, false, 0.f, 0, 2.f);
 		}
 	}
+
+	if (ShowMST)
+	{
+		for (const FDelaunayEdge& Edge : MSTEdges)
+		{
+			FVector A3D(Edge.A.X, Edge.A.Y, 0.f);
+			FVector B3D(Edge.B.X, Edge.B.Y, 0.f);
+
+			DrawDebugLine(GetWorld(), A3D, B3D, FColor(0, 100, 0), false, 0.f, 0, 6.f);
+		}
+	}
 }
 
 void Agenerator::SpawnRoom()
@@ -118,32 +136,31 @@ void Agenerator::SpawnRoom()
 	SpawnedCount++;
 }
 
-void Agenerator::SpawnInstantRooms()
+void Agenerator::SpawnInstantRooms() 
 {
-	float angle = FMath::FRand() * 2 * PI;
-	float r = FMath::Sqrt(FMath::FRand()) * radius;
+	float angle = FMath::FRand() * 2 * PI; 
 
-	float X = basePoint.X + FMath::Cos(angle) * r;
-	float Y = basePoint.Y + FMath::Sin(angle) * r;
-	float Z = basePoint.Z;
+	float r = FMath::Sqrt(FMath::FRand()) * radius; 
+	float X = basePoint.X + FMath::Cos(angle) * r; 
+	float Y = basePoint.Y + FMath::Sin(angle) * r; 
+	float Z = basePoint.Z; FVector SpawnLocation(X, Y, Z); 
+	
+	if (AActor* spawnedRoom = GetWorld()->SpawnActor<AActor>(baseActor, SpawnLocation, FRotator::ZeroRotator)) 
+	{ 
+		SpawnedRooms.Add(spawnedRoom); 
 
-	FVector SpawnLocation(X, Y, Z);
-
-	if (AActor* spawnedRoom = GetWorld()->SpawnActor<AActor>(baseActor, SpawnLocation, FRotator::ZeroRotator))
-	{
-		SpawnedRooms.Add(spawnedRoom);
-
-		float ScaleX = FMath::FRandRange(0.5f, 3.f);
-		float ScaleY = FMath::FRandRange(0.5f, 3.f);
-		float ScaleZ = FMath::FRandRange(0.5f, 3.f);
-		spawnedRoom->SetActorScale3D(FVector(ScaleX, ScaleY, ScaleZ));
-
-		if (AbaseActor* RoomActor = Cast<AbaseActor>(spawnedRoom))
-		{
-			RoomActor->RoomData.FloorArea = GetFloorSize(spawnedRoom);
+		float ScaleX = FMath::FRandRange(0.5f, 3.f); 
+		float ScaleY = FMath::FRandRange(0.5f, 3.f); 
+		float ScaleZ = FMath::FRandRange(0.5f, 3.f); 
+		
+		spawnedRoom->SetActorScale3D(FVector(ScaleX, ScaleY, ScaleZ)); 
+		
+		if (AbaseActor* RoomActor = Cast<AbaseActor>(spawnedRoom)) 
+		{ 
+			RoomActor->RoomData.FloorArea = GetFloorSize(spawnedRoom); 
 			RoomActor->RoomData.bMainRoom = false; 
-		}
-	}
+		} 
+	} 
 }
 
 void Agenerator::ComputeSuperTriangle()
@@ -408,5 +425,181 @@ void Agenerator::CleanupTriangles()
 			   (T.C == SA) || (T.C == SB) || (T.C == SC);
 	});
 }
+
+void Agenerator::NextDebugStep()
+{
+	DebugStep++;
+
+	if (DebugStep > 1)
+		DebugStep = 0;
+
+	switch (DebugStep)
+	{
+	case 0:
+		ShowDelaunay = true;
+		ShowMST = false;
+		break;
+
+	case 1: 
+		ShowDelaunay = false;
+		ShowMST = true;
+		BuildMST();
+
+		if (bGenerateCorridors)
+			BuildCorridors();
+		break;
+	}
+}
+
+void Agenerator::BuildMST()
+{
+	MSTEdges.Empty();
+
+	TArray<FVector2D> Points;
+	for (AActor* Room : MainRooms)
+	{
+		if (!Room) continue;
+		FVector Pos = Room->GetActorLocation();
+		Points.Add(FVector2D(Pos.X, Pos.Y));
+	}
+
+	if (Points.Num() == 0) return;
+
+	TArray<int32> Visited;
+	Visited.Add(0); 
+
+	while (Visited.Num() < Points.Num())
+	{
+		float MinDist = FLT_MAX;
+		int32 BestA = -1, BestB = -1;
+
+		for (int32 A : Visited)
+		{
+			for (int32 B = 0; B < Points.Num(); ++B)
+			{
+				if (Visited.Contains(B)) continue;
+
+				float Dist = FVector2D::Distance(Points[A], Points[B]);
+				if (Dist < MinDist)
+				{
+					MinDist = Dist;
+					BestA = A;
+					BestB = B;
+				}
+			}
+		}
+
+		if (BestA != -1 && BestB != -1)
+		{
+			MSTEdges.Add(FDelaunayEdge(Points[BestA], Points[BestB]));
+			Visited.Add(BestB);
+		}
+	}
+}
+
+void Agenerator::BuildCorridors()
+{
+	if (!bGenerateCorridors || MSTEdges.Num() == 0 || !baseActor)
+		return;
+
+	for (const FDelaunayEdge& Edge : MSTEdges)
+	{
+		FVector2D A2D = Edge.A;
+		FVector2D B2D = Edge.B;
+
+		FVector A3D(A2D.X, A2D.Y, basePoint.Z);
+		FVector B3D(B2D.X, B2D.Y, basePoint.Z);
+
+		bool bHorizontal = FMath::IsNearlyEqual(A3D.Y, B3D.Y, 1.f);
+		bool bVertical = FMath::IsNearlyEqual(A3D.X, B3D.X, 1.f);
+
+		if (bHorizontal || bVertical)
+		{
+			DrawDebugLine(GetWorld(), A3D, B3D, FColor::Cyan, false, 5000.f, 0, 3.f);
+		}
+		else
+		{
+			FVector Intermediate(A3D.X, B3D.Y, basePoint.Z);
+
+			DrawDebugLine(GetWorld(), A3D, Intermediate, FColor::Cyan, false, 5000.f, 0, 3.f);
+			DrawDebugLine(GetWorld(), Intermediate, B3D, FColor::Cyan, false, 5000.f, 0, 3.f);
+		}
+	}
+
+	FinalizeRooms();
+}
+
+void Agenerator::FinalizeRooms()
+{
+	TSet<AActor*> FinalRooms;
+
+	// 1?? On garde toutes les pièces principales
+	for (AActor* Room : MainRooms)
+	{
+		if (!Room) continue;
+		FinalRooms.Add(Room);
+		Room->SetActorHiddenInGame(false);
+		Room->SetActorEnableCollision(true);
+		Room->SetActorTickEnabled(true);
+	}
+
+	// 2?? Ajouter toutes les pièces secondaires qui se trouvent sur les chemins MST
+	for (const FDelaunayEdge& Edge : MSTEdges)
+	{
+		FVector2D Start2D = Edge.A;
+		FVector2D End2D = Edge.B;
+		FVector2D Dir = End2D - Start2D;
+
+		for (AActor* Room : SpawnedRooms)
+		{
+			if (!Room || FinalRooms.Contains(Room)) continue;
+
+			// On ne regarde que les pièces secondaires
+			if (AbaseActor* RoomActor = Cast<AbaseActor>(Room))
+			{
+				if (RoomActor->RoomData.bMainRoom)
+					continue;
+			}
+
+			FVector Pos3D = Room->GetActorLocation();
+			FVector2D Pos2D(Pos3D.X, Pos3D.Y);
+
+			FVector2D StartToPoint = Pos2D - Start2D;
+
+			// Projection du point sur la ligne
+			float T = FVector2D::DotProduct(StartToPoint, Dir) / Dir.SizeSquared();
+			T = FMath::Clamp(T, 0.f, 1.f);
+
+			FVector2D ClosestPoint = Start2D + Dir * T;
+
+			float Dist = FVector2D::Distance(Pos2D, ClosestPoint);
+
+			if (Dist < 50.f) // Tolérance de 50 unités
+			{
+				FinalRooms.Add(Room);
+				Room->SetActorHiddenInGame(false);
+				Room->SetActorEnableCollision(true);
+				Room->SetActorTickEnabled(true);
+			}
+		}
+	}
+
+	// 3?? Supprimer toutes les pièces non finales
+	for (AActor* Room : SpawnedRooms)
+	{
+		if (!FinalRooms.Contains(Room))
+		{
+			Room->Destroy();
+		}
+	}
+
+	// Met à jour la liste des pièces actuelles
+	SpawnedRooms = FinalRooms.Array();
+}
+
+
+
+
+
 
 
