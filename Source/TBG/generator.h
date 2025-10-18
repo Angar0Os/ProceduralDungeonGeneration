@@ -100,6 +100,12 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Generation")
 	bool bGenerateCorridors = false;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Room|Materials")
+	UMaterialInterface* MainRoomMaterial;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Room|Materials")
+	UMaterialInterface* SecondaryRoomMaterial;
+
 	UFUNCTION()
 	void BuildCorridors();
 

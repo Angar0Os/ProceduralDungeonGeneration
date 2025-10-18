@@ -1,6 +1,3 @@
-// Fill out your copyright notice in the Description page of Project Settings.
-
-
 #include "generator.h"
 #include "baseActor.h"
 
@@ -8,15 +5,11 @@
 #include "Engine/World.h"
 #include "Engine/Engine.h"
 
-// Sets default values
 Agenerator::Agenerator()
 {
- 	// Set this actor to call Tick() every frame.  You can turn this off to improve performance if you don't need it.
 	PrimaryActorTick.bCanEverTick = true;
-
 }
 
-// Called when the game starts or when spawned
 void Agenerator::BeginPlay()
 {
 	Super::BeginPlay();
@@ -59,6 +52,11 @@ void Agenerator::BeginPlay()
 		if (AbaseActor* RoomActor = Cast<AbaseActor>(SpawnedRooms[i]))
 		{
 			RoomActor->RoomData.bMainRoom = true;
+
+			if (MainRoomMaterial)
+			{
+				RoomActor->MeshComponent->SetMaterial(0, MainRoomMaterial);
+			}
 		}
 	}
 
@@ -68,6 +66,11 @@ void Agenerator::BeginPlay()
 		{
 			if (!Room->RoomData.bMainRoom)
 			{
+				if (SecondaryRoomMaterial)
+				{
+					Room->MeshComponent->SetMaterial(0, SecondaryRoomMaterial);
+				}
+
 				Room->SetActorHiddenInGame(true);
 				Room->SetActorEnableCollision(false);
 				Room->SetActorTickEnabled(false);
@@ -86,7 +89,6 @@ void Agenerator::BeginPlay()
 	InputComponent->BindAction("NextDebugStep", IE_Pressed, this, &Agenerator::NextDebugStep);
 }
 
-// Called every frame
 void Agenerator::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
