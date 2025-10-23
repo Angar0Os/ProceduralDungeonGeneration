@@ -7,6 +7,7 @@
 
 Agenerator::Agenerator()
 {
+	// Enable Tick() to be called every frame
 	PrimaryActorTick.bCanEverTick = true;
 }
 
@@ -14,62 +15,66 @@ void Agenerator::BeginPlay()
 {
 	Super::BeginPlay();
 
-	if (seeSpawn)
+	// If "seeSpawn" is enabled, spawn rooms progressively using a timer
+	if(seeSpawn)
 	{
 		GetWorld()->GetTimerManager().SetTimer(
 			SpawnTimer,
 			this,
 			&Agenerator::SpawnRoom,
-			0.1f,
-			true
+			0.1f, 
+			true  
 		);
 	}
 	else
 	{
-		for (int i = 0; i < basePieceCount; i++)
+		// Otherwise, spawn all rooms instantly
+		for(int i = 0; i < basePieceCount; i++)
 		{
 			SpawnInstantRooms();
 		}
 	}
 
+	// Sort rooms by floor area (largest first)
 	SpawnedRooms.Sort([](const AActor& A, const AActor& B)
-		{
-			const AbaseActor* RoomA = Cast<AbaseActor>(&A);
-			const AbaseActor* RoomB = Cast<AbaseActor>(&B);
+					  {
+						  const AbaseActor* RoomA = Cast<AbaseActor>(&A);
+						  const AbaseActor* RoomB = Cast<AbaseActor>(&B);
 
-			if (!RoomA || !RoomB) return false;
+						  if(!RoomA || !RoomB) return false;
 
-			return RoomA->RoomData.FloorArea > RoomB->RoomData.FloorArea;
-		});
+						  return RoomA->RoomData.FloorArea > RoomB->RoomData.FloorArea;
+					  });
 
+	// Select a subset of rooms as "main rooms"
 	int32 NumRooms = SpawnedRooms.Num();
-	int32 NumMainRooms = FMath::CeilToInt(NumRooms * 0.2f);
-	NumMainRooms = FMath::Max(NumMainRooms, 3);
-	NumMainRooms = FMath::Min(NumMainRooms, NumRooms);
+	int32 NumMainRooms = FMath::CeilToInt(NumRooms * 0.2f); 
+	NumMainRooms = FMath::Clamp(NumMainRooms, 3, NumRooms);
 
-	for (int32 i = 0; i < NumMainRooms; i++)
+	for(int32 i = 0; i < NumMainRooms; i++)
 	{
-		if (AbaseActor* RoomActor = Cast<AbaseActor>(SpawnedRooms[i]))
+		if(AbaseActor* RoomActor = Cast<AbaseActor>(SpawnedRooms[i]))
 		{
 			RoomActor->RoomData.bMainRoom = true;
 
-			if (MainRoomMaterial)
+			// Apply the main room material
+			if(MainRoomMaterial)
 			{
 				RoomActor->MeshComponent->SetMaterial(0, MainRoomMaterial);
 			}
 		}
 	}
 
-	for (AActor* Actor : SpawnedRooms)
+	// Configure non-main rooms
+	for(AActor* Actor : SpawnedRooms)
 	{
-		if (AbaseActor* Room = Cast<AbaseActor>(Actor))
+		if(AbaseActor* Room = Cast<AbaseActor>(Actor))
 		{
-			if (!Room->RoomData.bMainRoom)
+			if(!Room->RoomData.bMainRoom)
 			{
-				if (SecondaryRoomMaterial)
-				{
+				// Change material and disable visibility/collision
+				if(SecondaryRoomMaterial)
 					Room->MeshComponent->SetMaterial(0, SecondaryRoomMaterial);
-				}
 
 				Room->SetActorHiddenInGame(true);
 				Room->SetActorEnableCollision(false);
@@ -82,9 +87,11 @@ void Agenerator::BeginPlay()
 		}
 	}
 
+	// Compute the outer triangle and build Delaunay triangulation
 	ComputeSuperTriangle();
 	BuildDelaunay();
 
+	// Bind debug input action
 	EnableInput(GetWorld()->GetFirstPlayerController());
 	InputComponent->BindAction("NextDebugStep", IE_Pressed, this, &Agenerator::NextDebugStep);
 }
@@ -93,16 +100,18 @@ void Agenerator::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 
-	if (showSuperTriangle && SuperTriangleComputed)
+	// Draw the super triangle (blue)
+	if(showSuperTriangle && SuperTriangleComputed)
 	{
 		DrawDebugLine(GetWorld(), SuperTriangleA, SuperTriangleB, FColor::Blue, false, 0.f, 0, 10.f);
 		DrawDebugLine(GetWorld(), SuperTriangleB, SuperTriangleC, FColor::Blue, false, 0.f, 0, 10.f);
 		DrawDebugLine(GetWorld(), SuperTriangleC, SuperTriangleA, FColor::Blue, false, 0.f, 0, 10.f);
 	}
 
-	if (ShowDelaunay)
+	// Draw Delaunay triangulation edges (yellow)
+	if(ShowDelaunay)
 	{
-		for (const FDelaunayTriangle& Tri : Triangles)
+		for(const FDelaunayTriangle& Tri : Triangles)
 		{
 			FVector A3D(Tri.A.X, Tri.A.Y, 0.f);
 			FVector B3D(Tri.B.X, Tri.B.Y, 0.f);
@@ -114,9 +123,10 @@ void Agenerator::Tick(float DeltaTime)
 		}
 	}
 
-	if (ShowMST)
+	// Draw MST (Minimum Spanning Tree) edges (dark green)
+	if(ShowMST)
 	{
-		for (const FDelaunayEdge& Edge : MSTEdges)
+		for(const FDelaunayEdge& Edge : MSTEdges)
 		{
 			FVector A3D(Edge.A.X, Edge.A.Y, 0.f);
 			FVector B3D(Edge.B.X, Edge.B.Y, 0.f);
@@ -128,54 +138,61 @@ void Agenerator::Tick(float DeltaTime)
 
 void Agenerator::SpawnRoom()
 {
+	// Stop timer once all rooms are spawned
 	if(SpawnedCount >= basePieceCount)
 	{
 		GetWorld()->GetTimerManager().ClearTimer(SpawnTimer);
 		return;
 	}
-	
+
 	SpawnInstantRooms();
 	SpawnedCount++;
 }
 
-void Agenerator::SpawnInstantRooms() 
+void Agenerator::SpawnInstantRooms()
 {
-	float angle = FMath::FRand() * 2 * PI; 
+	// Random position within a circle of radius
+	float angle = FMath::FRand() * 2 * PI;
+	float r = FMath::Sqrt(FMath::FRand()) * radius;
+	float X = basePoint.X + FMath::Cos(angle) * r;
+	float Y = basePoint.Y + FMath::Sin(angle) * r;
+	float Z = basePoint.Z;
 
-	float r = FMath::Sqrt(FMath::FRand()) * radius; 
-	float X = basePoint.X + FMath::Cos(angle) * r; 
-	float Y = basePoint.Y + FMath::Sin(angle) * r; 
-	float Z = basePoint.Z; FVector SpawnLocation(X, Y, Z); 
-	
-	if (AActor* spawnedRoom = GetWorld()->SpawnActor<AActor>(baseActor, SpawnLocation, FRotator::ZeroRotator)) 
-	{ 
-		SpawnedRooms.Add(spawnedRoom); 
+	FVector SpawnLocation(X, Y, Z);
 
-		float ScaleX = FMath::FRandRange(0.5f, 3.f); 
-		float ScaleY = FMath::FRandRange(0.5f, 3.f); 
-		float ScaleZ = FMath::FRandRange(0.5f, 3.f); 
-		
-		spawnedRoom->SetActorScale3D(FVector(ScaleX, ScaleY, ScaleZ)); 
-		
-		if (AbaseActor* RoomActor = Cast<AbaseActor>(spawnedRoom)) 
-		{ 
-			RoomActor->RoomData.FloorArea = GetFloorSize(spawnedRoom); 
-			RoomActor->RoomData.bMainRoom = false; 
-		} 
-	} 
+	// Spawn a new baseActor instance
+	if(AActor* spawnedRoom = GetWorld()->SpawnActor<AActor>(baseActor, SpawnLocation, FRotator::ZeroRotator))
+	{
+		SpawnedRooms.Add(spawnedRoom);
+
+		// Apply a random scale
+		float ScaleX = FMath::FRandRange(0.5f, 3.f);
+		float ScaleY = FMath::FRandRange(0.5f, 3.f);
+		float ScaleZ = FMath::FRandRange(0.5f, 3.f);
+
+		spawnedRoom->SetActorScale3D(FVector(ScaleX, ScaleY, ScaleZ));
+
+		// Store room data
+		if(AbaseActor* RoomActor = Cast<AbaseActor>(spawnedRoom))
+		{
+			RoomActor->RoomData.FloorArea = GetFloorSize(spawnedRoom);
+			RoomActor->RoomData.bMainRoom = false;
+		}
+	}
 }
 
 void Agenerator::ComputeSuperTriangle()
 {
-	if (MainRooms.Num() == 0)
+	if(MainRooms.Num() == 0)
 		return;
 
-	float MinX =  FLT_MAX;
+	// Find the bounding box of all main rooms
+	float MinX = FLT_MAX;
 	float MaxX = -FLT_MAX;
-	float MinY =  FLT_MAX;
+	float MinY = FLT_MAX;
 	float MaxY = -FLT_MAX;
 
-	for (AActor* Room : MainRooms)
+	for(AActor* Room : MainRooms)
 	{
 		FVector Pos = Room->GetActorLocation();
 		MinX = FMath::Min(MinX, Pos.X);
@@ -184,15 +201,16 @@ void Agenerator::ComputeSuperTriangle()
 		MaxY = FMath::Max(MaxY, Pos.Y);
 	}
 
+	// Compute the center and dimensions of the super triangle
 	FVector2D Center((MinX + MaxX) / 2.0f, (MinY + MaxY) / 2.0f);
-	
-	float Width  = (MaxX - MinX) + SuperTriangleGap;
+	float Width = (MaxX - MinX) + SuperTriangleGap;
 	float Height = (MaxY - MinY) + SuperTriangleGap;
 	float Radius = FMath::Max(Width, Height);
 
-	FVector2D P1 = Center + FVector2D(0, Radius); 
+	// Define the 3 points of the super triangle
+	FVector2D P1 = Center + FVector2D(0, Radius);
 	FVector2D P2 = Center + FVector2D(-Radius * FMath::Sin(PI / 3), -Radius / 2);
-	FVector2D P3 = Center + FVector2D( Radius * FMath::Sin(PI / 3), -Radius / 2);
+	FVector2D P3 = Center + FVector2D(Radius * FMath::Sin(PI / 3), -Radius / 2);
 
 	SuperTriangleA = FVector(P1.X, P1.Y, 0);
 	SuperTriangleB = FVector(P2.X, P2.Y, 0);
@@ -203,43 +221,45 @@ void Agenerator::ComputeSuperTriangle()
 
 float Agenerator::GetFloorSize(const AActor* Actor)
 {
+	// Approximate floor area using bounding box dimensions
 	FVector Size = Actor->GetComponentsBoundingBox().GetSize();
 	FVector Scale = Actor->GetActorScale3D();
 
-	float Width  = Size.X * Scale.X;
-	float Depth  = Size.Y * Scale.Y;
-	
-	float Area = Width * Depth;
+	float Width = Size.X * Scale.X;
+	float Depth = Size.Y * Scale.Y;
 
-	return Area;
+	return Width * Depth;
 }
 
 void Agenerator::BuildDelaunay()
 {
 	Triangles.Empty();
 
+	// Create the initial super-triangle
 	FDelaunayTriangle SuperTri(
 		FVector2D(SuperTriangleA.X, SuperTriangleA.Y),
 		FVector2D(SuperTriangleB.X, SuperTriangleB.Y),
 		FVector2D(SuperTriangleC.X, SuperTriangleC.Y)
 	);
-
 	Triangles.Add(SuperTri);
 
+	// Extract main room centers as points
 	DelaunayPoints.Empty();
-	for (AActor* Room : MainRooms)
+	for(AActor* Room : MainRooms)
 	{
 		FVector Pos = Room->GetActorLocation();
 		DelaunayPoints.Add(FVector2D(Pos.X, Pos.Y));
 	}
 
-	for (int i = 0; i < DelaunayPoints.Num(); ++i)
+	// Randomize insertion order for stability
+	for(int i = 0; i < DelaunayPoints.Num(); ++i)
 	{
 		int j = FMath::RandRange(0, DelaunayPoints.Num() - 1);
 		DelaunayPoints.Swap(i, j);
 	}
 
-	if (StepByStep)
+	// Step-by-step mode (debug visualization)
+	if(StepByStep)
 	{
 		CurrentPointIndex = 0;
 		GetWorld()->GetTimerManager().SetTimer(
@@ -252,7 +272,8 @@ void Agenerator::BuildDelaunay()
 	}
 	else
 	{
-		for (const FVector2D& P : DelaunayPoints)
+		// Instant triangulation
+		for(const FVector2D& P : DelaunayPoints)
 		{
 			InsertPointDelaunay(P);
 		}
@@ -260,97 +281,115 @@ void Agenerator::BuildDelaunay()
 	}
 }
 
+
+// Executes a single step of the incremental Delaunay triangulation process.
 void Agenerator::DelaunayStep()
 {
-	if (CurrentPointIndex >= DelaunayPoints.Num())
+	// Stop if we've processed all points.
+	if(CurrentPointIndex >= DelaunayPoints.Num())
 	{
 		GetWorld()->GetTimerManager().ClearTimer(DelaunayStepTimer);
-		CleanupTriangles();
+		CleanupTriangles(); // Remove triangles connected to the super triangle.
 		return;
 	}
 
+	// Get the next point to insert.
 	const FVector2D& P = DelaunayPoints[CurrentPointIndex];
 	BadTrianglesStep.Empty();
 	PolygonEdgesStep.Empty();
 
-	for (const FDelaunayTriangle& Tri : Triangles)
+	// Find all triangles whose circumcircle contains the new point P.
+	for(const FDelaunayTriangle& Tri : Triangles)
 	{
-		if (IsPointInsideCircumcircle(P, Tri))
+		if(IsPointInsideCircumcircle(P, Tri))
 		{
 			BadTrianglesStep.Add(Tri);
 		}
 	}
 
-	for (const FDelaunayTriangle& BadTri : BadTrianglesStep)
+	// Identify the boundary edges (the polygonal hole to retriangulate).
+	for(const FDelaunayTriangle& BadTri : BadTrianglesStep)
 	{
+		// The 3 edges of the triangle.
 		FDelaunayEdge Edges[3] = {
 			FDelaunayEdge(BadTri.A, BadTri.B),
 			FDelaunayEdge(BadTri.B, BadTri.C),
 			FDelaunayEdge(BadTri.C, BadTri.A)
 		};
 
-		for (const FDelaunayEdge& E : Edges)
+		// Keep edges that are not shared by two "bad" triangles.
+		for(const FDelaunayEdge& E : Edges)
 		{
 			bool bShared = false;
-			for (const FDelaunayTriangle& Other : BadTrianglesStep)
+			for(const FDelaunayTriangle& Other : BadTrianglesStep)
 			{
-				if (&BadTri == &Other) continue;
-				if (TriangleHasEdge(Other, E))
+				if(&BadTri == &Other) continue;
+				if(TriangleHasEdge(Other, E))
 				{
 					bShared = true;
 					break;
 				}
 			}
-			if (!bShared)
+			if(!bShared)
 			{
 				PolygonEdgesStep.Add(E);
 			}
 		}
 	}
 
-	for (const FDelaunayTriangle& BT : BadTrianglesStep)
+	// Remove all bad triangles (they will be replaced).
+	for(const FDelaunayTriangle& BT : BadTrianglesStep)
 	{
 		Triangles.Remove(BT);
 	}
 
-	for (const FDelaunayEdge& E : PolygonEdgesStep)
+	// Create new triangles connecting the point P to each boundary edge.
+	for(const FDelaunayEdge& E : PolygonEdgesStep)
 	{
 		FDelaunayTriangle NewTriangle(E.A, E.B, P);
 		Triangles.Add(NewTriangle);
 	}
 
+	// Debug visualization: draw the new point.
 	DrawDebugSphere(GetWorld(), FVector(P.X, P.Y, 10.f), 50.f, 12, FColor::Cyan, false, StepDelay, 0, 2.f);
 
-	for (const FDelaunayTriangle& T : BadTrianglesStep)
+	// Draw the bad triangles (to be deleted).
+	for(const FDelaunayTriangle& T : BadTrianglesStep)
 	{
 		DrawDebugLine(GetWorld(), FVector(T.A.X, T.A.Y, 0), FVector(T.B.X, T.B.Y, 0), FColor::Red, false, StepDelay, 0, 3.f);
 		DrawDebugLine(GetWorld(), FVector(T.B.X, T.B.Y, 0), FVector(T.C.X, T.C.Y, 0), FColor::Red, false, StepDelay, 0, 3.f);
 		DrawDebugLine(GetWorld(), FVector(T.C.X, T.C.Y, 0), FVector(T.A.X, T.A.Y, 0), FColor::Red, false, StepDelay, 0, 3.f);
 	}
 
-	for (const FDelaunayEdge& E : PolygonEdgesStep)
+	// Draw the edges of the polygonal cavity.
+	for(const FDelaunayEdge& E : PolygonEdgesStep)
 	{
 		DrawDebugLine(GetWorld(), FVector(E.A.X, E.A.Y, 0), FVector(E.B.X, E.B.Y, 0), FColor::Green, false, StepDelay, 0, 5.f);
 	}
 
+	// Proceed to the next point on the next step.
 	CurrentPointIndex++;
 }
 
 
+// Performs a full Delaunay insertion (used outside step-by-step visualization).
 void Agenerator::InsertPointDelaunay(const FVector2D& P)
 {
 	TArray<FDelaunayTriangle> BadTriangles;
 
-	for (const FDelaunayTriangle& Tri : Triangles)
+	// Find all triangles whose circumcircle contains P.
+	for(const FDelaunayTriangle& Tri : Triangles)
 	{
-		if (IsPointInsideCircumcircle(P, Tri))
+		if(IsPointInsideCircumcircle(P, Tri))
 		{
 			BadTriangles.Add(Tri);
 		}
 	}
 
 	TArray<FDelaunayEdge> PolygonEdges;
-	for (const FDelaunayTriangle& BadTri : BadTriangles)
+
+	// Find the polygon edges (edges not shared between two bad triangles).
+	for(const FDelaunayTriangle& BadTri : BadTriangles)
 	{
 		FDelaunayEdge Edges[3] = {
 			FDelaunayEdge(BadTri.A, BadTri.B),
@@ -358,37 +397,39 @@ void Agenerator::InsertPointDelaunay(const FVector2D& P)
 			FDelaunayEdge(BadTri.C, BadTri.A)
 		};
 
-		for (const FDelaunayEdge& E : Edges)
+		for(const FDelaunayEdge& E : Edges)
 		{
 			bool bShared = false;
-			for (const FDelaunayTriangle& Other : BadTriangles)
+			for(const FDelaunayTriangle& Other : BadTriangles)
 			{
-				if (&BadTri == &Other) continue; 
-				if (TriangleHasEdge(Other, E))
+				if(&BadTri == &Other) continue;
+				if(TriangleHasEdge(Other, E))
 				{
 					bShared = true;
 					break;
 				}
 			}
-			if (!bShared)
+			if(!bShared)
 			{
 				PolygonEdges.Add(E);
 			}
 		}
 	}
 
-	for (const FDelaunayTriangle& BT : BadTriangles)
+	// Remove bad triangles and retriangulate.
+	for(const FDelaunayTriangle& BT : BadTriangles)
 	{
 		Triangles.Remove(BT);
 	}
 
-	for (const FDelaunayEdge& E : PolygonEdges)
+	for(const FDelaunayEdge& E : PolygonEdges)
 	{
-		FDelaunayTriangle NewTriangle(E.A, E.B, P);
-		Triangles.Add(NewTriangle);
+		Triangles.Add(FDelaunayTriangle(E.A, E.B, P));
 	}
 }
 
+
+// Check if point P is inside the circumcircle of triangle Tri.
 bool Agenerator::IsPointInsideCircumcircle(const FVector2D& P, const FDelaunayTriangle& Tri) const
 {
 	double ax = Tri.A.X - P.X;
@@ -398,13 +439,16 @@ bool Agenerator::IsPointInsideCircumcircle(const FVector2D& P, const FDelaunayTr
 	double cx = Tri.C.X - P.X;
 	double cy = Tri.C.Y - P.Y;
 
+	// Determinant > 0 means the point is inside the circumcircle.
 	double det = (ax * ax + ay * ay) * (bx * cy - cx * by)
-			   - (bx * bx + by * by) * (ax * cy - cx * ay)
-			   + (cx * cx + cy * cy) * (ax * by - bx * ay);
+		- (bx * bx + by * by) * (ax * cy - cx * ay)
+		+ (cx * cx + cy * cy) * (ax * by - bx * ay);
 
 	return det > 0.0;
 }
 
+
+// Check if a triangle contains a given edge (regardless of vertex order).
 bool Agenerator::TriangleHasEdge(const FDelaunayTriangle& Tri, const FDelaunayEdge& Edge) const
 {
 	FDelaunayEdge E1(Tri.A, Tri.B);
@@ -414,6 +458,8 @@ bool Agenerator::TriangleHasEdge(const FDelaunayTriangle& Tri, const FDelaunayEd
 	return (E1 == Edge) || (E2 == Edge) || (E3 == Edge);
 }
 
+
+// Remove all triangles connected to the "super triangle" (outer bounding triangle).
 void Agenerator::CleanupTriangles()
 {
 	FVector2D SA(SuperTriangleA.X, SuperTriangleA.Y);
@@ -421,68 +467,75 @@ void Agenerator::CleanupTriangles()
 	FVector2D SC(SuperTriangleC.X, SuperTriangleC.Y);
 
 	Triangles.RemoveAll([&](const FDelaunayTriangle& T)
-	{
-		return (T.A == SA) || (T.A == SB) || (T.A == SC) ||
-			   (T.B == SA) || (T.B == SB) || (T.B == SC) ||
-			   (T.C == SA) || (T.C == SB) || (T.C == SC);
-	});
+						{
+							return (T.A == SA) || (T.A == SB) || (T.A == SC) ||
+								(T.B == SA) || (T.B == SB) || (T.B == SC) ||
+								(T.C == SA) || (T.C == SB) || (T.C == SC);
+						});
 }
 
+
+// Switch between debug visualization modes (Delaunay vs MST).
 void Agenerator::NextDebugStep()
 {
 	DebugStep++;
 
-	if (DebugStep > 1)
+	if(DebugStep > 1)
 		DebugStep = 0;
 
-	switch (DebugStep)
+	switch(DebugStep)
 	{
-	case 0:
-		ShowDelaunay = true;
-		ShowMST = false;
-		break;
+		case 0:
+			ShowDelaunay = true;
+			ShowMST = false;
+			break;
 
-	case 1: 
-		ShowDelaunay = false;
-		ShowMST = true;
-		BuildMST();
+		case 1:
+			ShowDelaunay = false;
+			ShowMST = true;
+			BuildMST();
 
-		if (bGenerateCorridors)
-			BuildCorridors();
-		break;
+			if(bGenerateCorridors)
+				BuildCorridors();
+			break;
 	}
 }
 
+
+// Build a Minimum Spanning Tree (MST) over the main rooms using Prim's algorithm.
 void Agenerator::BuildMST()
 {
 	MSTEdges.Empty();
 
+	// Collect room positions.
 	TArray<FVector2D> Points;
-	for (AActor* Room : MainRooms)
+	for(AActor* Room : MainRooms)
 	{
-		if (!Room) continue;
+		if(!Room) continue;
 		FVector Pos = Room->GetActorLocation();
 		Points.Add(FVector2D(Pos.X, Pos.Y));
 	}
 
-	if (Points.Num() == 0) return;
+	if(Points.Num() == 0) return;
 
+	// Initialize with the first point.
 	TArray<int32> Visited;
-	Visited.Add(0); 
+	Visited.Add(0);
 
-	while (Visited.Num() < Points.Num())
+	// Prim's MST algorithm.
+	while(Visited.Num() < Points.Num())
 	{
 		float MinDist = FLT_MAX;
 		int32 BestA = -1, BestB = -1;
 
-		for (int32 A : Visited)
+		for(int32 A : Visited)
 		{
-			for (int32 B = 0; B < Points.Num(); ++B)
+			for(int32 B = 0; B < Points.Num(); ++B)
 			{
-				if (Visited.Contains(B)) continue;
+				if(Visited.Contains(B)) continue;
 
 				float Dist = FVector2D::Distance(Points[A], Points[B]);
-				if (Dist < MinDist)
+				if(Dist < MinDist)
 				{
 					MinDist = Dist;
 					BestA = A;
@@ -491,7 +544,7 @@ void Agenerator::BuildMST()
 			}
 		}
 
-		if (BestA != -1 && BestB != -1)
+		if(BestA != -1 && BestB != -1)
 		{
 			MSTEdges.Add(FDelaunayEdge(Points[BestA], Points[BestB]));
 			Visited.Add(BestB);
@@ -499,12 +552,14 @@ void Agenerator::BuildMST()
 	}
 }
 
+
+// Draw corridors (debug or real placement) between connected rooms.
 void Agenerator::BuildCorridors()
 {
-	if (!bGenerateCorridors || MSTEdges.Num() == 0 || !baseActor)
+	if(!bGenerateCorridors || MSTEdges.Num() == 0 || !baseActor)
 		return;
 
-	for (const FDelaunayEdge& Edge : MSTEdges)
+	for(const FDelaunayEdge& Edge : MSTEdges)
 	{
 		FVector2D A2D = Edge.A;
 		FVector2D B2D = Edge.B;
@@ -515,14 +570,15 @@ void Agenerator::BuildCorridors()
 		bool bHorizontal = FMath::IsNearlyEqual(A3D.Y, B3D.Y, 1.f);
 		bool bVertical = FMath::IsNearlyEqual(A3D.X, B3D.X, 1.f);
 
-		if (bHorizontal || bVertical)
+		// If the edge is axis-aligned, draw a straight line.
+		if(bHorizontal || bVertical)
 		{
 			DrawDebugLine(GetWorld(), A3D, B3D, FColor::Cyan, false, 5000.f, 0, 3.f);
 		}
 		else
 		{
+			// Otherwise, draw two orthogonal corridor segments.
 			FVector Intermediate(A3D.X, B3D.Y, basePoint.Z);
-
 			DrawDebugLine(GetWorld(), A3D, Intermediate, FColor::Cyan, false, 5000.f, 0, 3.f);
 			DrawDebugLine(GetWorld(), Intermediate, B3D, FColor::Cyan, false, 5000.f, 0, 3.f);
 		}
@@ -531,32 +587,36 @@ void Agenerator::BuildCorridors()
 	FinalizeRooms();
 }
 
+
+// Finalize room visibility and destroy unused rooms after corridor creation.
 void Agenerator::FinalizeRooms()
 {
 	TSet<AActor*> FinalRooms;
 
-	for (AActor* Room : MainRooms)
+	// Activate main rooms.
+	for(AActor* Room : MainRooms)
 	{
-		if (!Room) continue;
+		if(!Room) continue;
 		FinalRooms.Add(Room);
 		Room->SetActorHiddenInGame(false);
 		Room->SetActorEnableCollision(true);
 		Room->SetActorTickEnabled(true);
 	}
 
-	for (const FDelaunayEdge& Edge : MSTEdges)
+	// Also activate rooms that are close to corridor paths.
+	for(const FDelaunayEdge& Edge : MSTEdges)
 	{
 		FVector2D Start2D = Edge.A;
 		FVector2D End2D = Edge.B;
 		FVector2D Dir = End2D - Start2D;
 
-		for (AActor* Room : SpawnedRooms)
+		for(AActor* Room : SpawnedRooms)
 		{
-			if (!Room || FinalRooms.Contains(Room)) continue;
+			if(!Room || FinalRooms.Contains(Room)) continue;
 
-			if (AbaseActor* RoomActor = Cast<AbaseActor>(Room))
+			if(AbaseActor* RoomActor = Cast<AbaseActor>(Room))
 			{
-				if (RoomActor->RoomData.bMainRoom)
+				if(RoomActor->RoomData.bMainRoom)
 					continue;
 			}
 
@@ -569,10 +629,10 @@ void Agenerator::FinalizeRooms()
 			T = FMath::Clamp(T, 0.f, 1.f);
 
 			FVector2D ClosestPoint = Start2D + Dir * T;
-
 			float Dist = FVector2D::Distance(Pos2D, ClosestPoint);
 
-			if (Dist < 50.f) 
+			// If the room is close enough to a corridor, keep it.
+			if(Dist < 50.f)
 			{
 				FinalRooms.Add(Room);
 				Room->SetActorHiddenInGame(false);
@@ -582,9 +642,10 @@ void Agenerator::FinalizeRooms()
 		}
 	}
 
-	for (AActor* Room : SpawnedRooms)
+	// Destroy all rooms not part of the final selection.
+	for(AActor* Room : SpawnedRooms)
 	{
-		if (!FinalRooms.Contains(Room))
+		if(!FinalRooms.Contains(Room))
 		{
 			Room->Destroy();
 		}
@@ -592,6 +653,7 @@ void Agenerator::FinalizeRooms()
 
 	SpawnedRooms = FinalRooms.Array();
 }
+
 
 
 
